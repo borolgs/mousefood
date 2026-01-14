@@ -30,8 +30,11 @@ where
     D: DrawTarget<Color = C>,
     C: PixelColor,
 {
+    /// Callback fired before each buffer flush.
+    pub pre_flush_callback: Box<dyn FnMut(&mut crate::framebuffer::HeapBuffer<C>)>,
     /// Callback fired after each buffer flush.
     pub flush_callback: Box<dyn FnMut(&mut D)>,
+
     /// Regular font.
     pub font_regular: MonoFont<'static>,
     /// Bold font.
@@ -55,6 +58,7 @@ where
 {
     fn default() -> Self {
         Self {
+            pre_flush_callback: Box::new(|_| {}),
             flush_callback: Box::new(|_| {}),
             font_regular: default_font::get_regular(),
             font_bold: None,
@@ -83,6 +87,8 @@ where
     display: &'display mut D,
     display_type: PhantomData<D>,
 
+    #[cfg(feature = "framebuffer")]
+    pre_flush_callback: Box<dyn FnMut(&mut crate::framebuffer::HeapBuffer<C>)>,
     flush_callback: Box<dyn FnMut(&mut D)>,
 
     #[cfg(feature = "framebuffer")]
@@ -105,6 +111,9 @@ where
 {
     fn init(
         display: &'display mut D,
+        #[cfg(feature = "framebuffer")] pre_flush_callback: impl FnMut(
+            &mut crate::framebuffer::HeapBuffer<C>,
+        ) + 'static,
         flush_callback: impl FnMut(&mut D) + 'static,
         font_regular: MonoFont<'static>,
         font_bold: Option<MonoFont<'static>>,
@@ -138,6 +147,8 @@ where
             buffer: crate::framebuffer::HeapBuffer::new(display.bounding_box()),
             display,
             display_type: PhantomData,
+            #[cfg(feature = "framebuffer")]
+            pre_flush_callback: Box::new(pre_flush_callback),
             flush_callback: Box::new(flush_callback),
             font_regular,
             font_bold,
@@ -158,6 +169,8 @@ where
     ) -> EmbeddedBackend<'display, D, C> {
         Self::init(
             display,
+            #[cfg(feature = "framebuffer")]
+            config.pre_flush_callback,
             config.flush_callback,
             config.font_regular,
             config.font_bold,
@@ -296,9 +309,12 @@ where
 
     fn flush(&mut self) -> Result<()> {
         #[cfg(feature = "framebuffer")]
-        self.display
-            .fill_contiguous(&self.display.bounding_box(), &self.buffer)
-            .map_err(|_| crate::error::Error::DrawError)?;
+        {
+            (self.pre_flush_callback)(&mut self.buffer);
+            self.display
+                .fill_contiguous(&self.display.bounding_box(), &self.buffer)
+                .map_err(|_| crate::error::Error::DrawError)?;
+        }
         (self.flush_callback)(self.display);
         Ok(())
     }
